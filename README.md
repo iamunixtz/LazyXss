@@ -22,7 +22,7 @@ Automation tool to testing and confirm the xss vulnerability.
 ![Lazy XSS](lazyxss.png)
 
 # Setup Lazy Xss 🛠
-**Make Sure to install the latest and the same version of google chrome and the chromedriver to avoid the errors**
+**Make Sure to install the latest and the same version of google chrome and the chromedriver based on Your Device Version to avoid the errors**
 
 # Installation on Debian
 ```
@@ -30,7 +30,6 @@ apt update && upgrade
 https://github.com/iamunixtz/LazyXss/
 cd LazyXss
 pip install requirements.txt
-bash installer.sh
 python3 LazyXss
 ```
 # Please Please 🤧
