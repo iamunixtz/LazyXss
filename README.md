@@ -5,6 +5,7 @@
   <a href="https://t.me/+0pG--ix2p04xYmJk"><img src="https://img.shields.io/badge/Join%20Us%20On-Telegram-2599d2.svg" alt="Telegram"></a>
   <img src="https://img.shields.io/badge/Made%20with-Python-1f425f.svg" alt="Made with Python">
 </p>
+
 # LazyXss
 Automation tool to testing and confirm the xss vulnerability.
 
