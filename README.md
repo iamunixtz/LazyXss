@@ -38,6 +38,7 @@ apt update && upgrade
 https://github.com/iamunixtz/LazyXss/
 cd LazyXss
 pip install requirements.txt
+python3 installer.py
 python3 LazyXss
 ```
 # Please Please 🤧
