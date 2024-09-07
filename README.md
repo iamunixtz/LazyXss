@@ -43,6 +43,8 @@ LazyXss automates the process of detecting reflected XSS vulnerabilities in URLs
 - [x] **Proxy Support:** Optionally use proxies for testing to avoid detection and IP blocking.
 - [x] **Logging:** Detailed logging of test results and server status.
 - [x] **Multi-Platform Support:** Easy installation and setup on Windows, Debian-based, Fedora-based, and macOS systems.
+- [x] **Handle urls on file**
+- [x] **Improving the proxy and encoding the payloads**
 
 ## Upcoming Features 🚀
 
