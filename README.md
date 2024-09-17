@@ -28,6 +28,23 @@ LazyXss is an automation tool designed to test and confirm XSS (Cross-Site Scrip
                               |  $$$$$$/                             
                                \______/
 
+usage: lazyxssX5.py [-h] [-u URL] [-f FILE] [-t THREADS] [-e ENCODING] [-o OUTPUT] [-T TIME_SEC]
+
+XSS Vulnerability Checker Tool
+
+options:
+  -h, --help            show this help message and exit
+  -u URL, --url URL     Specify a single URL to test for XSS vulnerabilities.
+  -f FILE, --file FILE  Specify a file containing a list of URLs to test.
+  -t THREADS, --threads THREADS
+                        Specify the number of threads to use (default: 5).
+  -e ENCODING, --encoding ENCODING
+                        Specify the number of times to encode payloads (default: 0).
+  -o OUTPUT, --output OUTPUT
+                        Specify a custom file name for output results (default: result.txt).
+  -T TIME_SEC, --time-sec TIME_SEC
+                        Specify connection timeout in seconds (default: 10).
+
 ```
 
 ## About LazyXss 📝
@@ -36,7 +53,7 @@ LazyXss automates the process of detecting reflected XSS vulnerabilities in URLs
 
 ![Lazy XSS](lazyxss.png)
 
-## Features ✨
+## Features v1.1✨
 
 - [x] **Automated Testing:** Quickly checks for reflected XSS vulnerabilities in URLs.
 - [x] **Configurable Payloads:** Allows you to specify and encode payloads for testing.
@@ -45,12 +62,12 @@ LazyXss automates the process of detecting reflected XSS vulnerabilities in URLs
 - [x] **Multi-Platform Support:** Easy installation and setup on Windows, Debian-based, Fedora-based, and macOS systems.
 - [x] **Handle urls on file**
 - [x] **Improving the proxy and encoding the payloads**
+- [x] **Increase Threads for testing multliples urls**
+- [x] **Command line mode**
 
 ## Upcoming Features 🚀
 
 - [ ] **GUI Mode:** A graphical user interface for easier configuration and use.
-- [ ] **Improved Speed:** Optimizations to enhance testing speed and performance.
-- [ ] **Increased Accuracy:** Enhanced algorithms for more accurate vulnerability detection.
 - [ ] **Advanced Reporting:** Detailed and customizable reports of test results.
 
 ## Setup LazyXss 🛠
@@ -79,7 +96,7 @@ Ensure you install the latest version of Google Chrome and the corresponding ver
 
 4. **Start LazyXss**
    ```cmd
-   python LazyXss.py
+   python LazyXss.py -h
    ```
 
 #### Debian-based Systems (e.g., Ubuntu)
@@ -104,7 +121,7 @@ Ensure you install the latest version of Google Chrome and the corresponding ver
 
 4. **Start LazyXss**
    ```bash
-   python3 LazyXss.py
+   python3 LazyXss.py -h 
    ```
 
 #### Fedora-based Systems
