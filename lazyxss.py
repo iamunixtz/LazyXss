@@ -97,7 +97,7 @@ def check_xss_with_selenium(url, payload, timeout=10):
     finally:
         driver.quit()
 
-def log_vulnerability(url, payload, is_vuln, payload_number):
+def log_vulnerability(url, payload, is_vuln, payload_number, output_file):
     """Log the URL and payload with appropriate color based on vulnerability status."""
     current_time = time.strftime("%H:%M:%S", time.localtime())  # Get current time
     time_str = f"[{CYAN}{current_time}{RESET}] "  # Cyan color for time
@@ -105,13 +105,20 @@ def log_vulnerability(url, payload, is_vuln, payload_number):
     # Create the full log message
     full_log = f"[payload {payload_number}] {url}"
 
-    # If the URL is vulnerable, print in red
+    # If the URL is vulnerable, print in red and save to output file
     if is_vuln:
-        logging.info(f"{time_str}[{RED}VULN{RESET}] {RED}{full_log}{RESET}")  # Whole log in red
+        log_message = f"{time_str}[{RED}VULN{RESET}] {RED}{full_log}{RESET}"
     else:
-        logging.info(f"{time_str}[{GREEN}NOT VULN{RESET}] {GREEN}{full_log}{RESET}")  # Whole log in green
+        log_message = f"{time_str}[{GREEN}NOT VULN{RESET}] {GREEN}{full_log}{RESET}"
+    
+    # Print to console
+    logging.info(log_message)
 
-def test_url_payload(url, payload, payload_number, proxies=None, encode_times=0, timeout=10):
+    # Write to the output file
+    if output_file:
+        output_file.write(f"{log_message}\n")
+
+def test_url_payload(url, payload, payload_number, proxies=None, encode_times=0, timeout=10, output_file=None):
     """Test a single URL with a single payload."""
     session = create_session()  # Use the session with retry
     encoded_payload = encode_payload(payload, encode_times)
@@ -141,20 +148,20 @@ def test_url_payload(url, payload, payload_number, proxies=None, encode_times=0,
 
         # Check for XSS prompt or alert
         is_vuln, alert_text = check_xss_with_selenium(url, f"?payload={payload}", timeout)
-        log_vulnerability(test_url, payload, is_vuln, payload_number)
+        log_vulnerability(test_url, payload, is_vuln, payload_number, output_file)
 
     except requests.RequestException as e:
         logging.error(f"{RED}[error] Request failed: {e}{RESET}")
 
-def worker(url, payloads, proxies=None, encode_times=0, timeout=10):
+def worker(url, payloads, proxies=None, encode_times=0, timeout=10, output_file=None):
     """Thread worker function to test multiple payloads against a URL."""
     for i, payload in enumerate(payloads, start=1):
-        test_url_payload(url, payload, i, proxies, encode_times, timeout)
+        test_url_payload(url, payload, i, proxies, encode_times, timeout, output_file)
 
-def test_xss(urls, payloads, proxies=None, encode_times=0, num_threads=5, timeout=10):
+def test_xss(urls, payloads, proxies=None, encode_times=0, num_threads=5, timeout=10, output_file=None):
     """Test XSS payloads against a list of URLs using multiple threads."""
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = [executor.submit(worker, url, payloads, proxies, encode_times, timeout) for url in urls]
+        futures = [executor.submit(worker, url, payloads, proxies, encode_times, timeout, output_file) for url in urls]
         for future in concurrent.futures.as_completed(futures):
             future.result()  # to raise exceptions if any
 
@@ -189,9 +196,19 @@ def main():
         print(f"Error loading payloads from file: {args.payloads}")
         sys.exit(1)
 
-    # Start testing for XSS vulnerabilities
-    test_xss(urls, payloads, proxies=None, encode_times=args.encoding, num_threads=args.threads, timeout=args.time_sec)
+    # Open output file for writing results
+    with open(args.output, 'w') as output_file:
+        # Start testing for XSS vulnerabilities
+        test_xss(urls, payloads, proxies=None, num_threads=args.threads, timeout=args.time_sec, output_file=output_file)
 
+# Handle keyboard interrupt (Ctrl + C)
 if __name__ == "__main__":
-    print_banner()
-    main()
+    try:
+        print_banner()
+        main()
+    except KeyboardInterrupt:
+        # Get the current user (Kali Linux user)
+        user = os.getlogin()
+        print(f"\n{CYAN}Happy hacking!{user}{RESET}")
+        sys.exit(0)
+
