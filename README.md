@@ -2,7 +2,7 @@
   <a href="https://github.com/iamunixtz/LazyXss/issues"><img src="https://img.shields.io/github/issues/iamunixtz/LazyXss.svg" alt="GitHub issues"></a>
   <a href="https://github.com/iamunixtz/LazyXss/stargazers"><img src="https://img.shields.io/github/stars/iamunixtz/LazyXss.svg" alt="GitHub stars"></a>
   <a href="https://github.com/iamunixtz/LazyXss/blob/master/LICENSE"><img src="https://img.shields.io/github/license/iamunixtz/LazyXss.svg" alt="GitHub license"></a>
- <a href="https://t.me/bunnys3c"><img src="https://img.shields.io/badge/Join%20Us%20On-Telegram-2599d2.svg" alt="Telegram"></a>
+  <a href="https://t.me/bunnys3c"><img src="https://img.shields.io/badge/Join%20Us%20On-Telegram-2599d2.svg" alt="Telegram"></a>
   <img src="https://img.shields.io/badge/Made%20with-Python-1f425f.svg" alt="Made with Python">
 </p>
 
@@ -12,8 +12,7 @@
 
 </div>
 
-
-LazyXss is an automation tool designed to test and confirm XSS (Cross-Site Scripting) vulnerabilities, specifically focusing on reflected XSS in URLs.
+LazyXss is an automation tool designed to test and confirm Cross-Site Scripting (XSS) vulnerabilities, specifically focusing on reflected XSS in URLs.
 
 ```
  /$$                                     /$$   /$$                   
@@ -49,30 +48,30 @@ options:
 
 ## About LazyXss 📝
 
-LazyXss automates the process of detecting reflected XSS vulnerabilities in URLs. This tool does not scan for DOM-based XSS or other types of vulnerabilities. It focuses exclusively on reflected XSS based on the provided URL. Thank you for using LazyXss!
+LazyXss automates the process of detecting reflected XSS vulnerabilities in URLs. This tool is specifically designed for testing reflected XSS and does not detect DOM-based XSS or other types of vulnerabilities. Thank you for using LazyXss!
 
 ![Lazy XSS](lazyxss.png)
 
-## Features v1.1✨
+## Features v1.1 ✨
 
 - [x] **Automated Testing:** Quickly checks for reflected XSS vulnerabilities in URLs.
 - [x] **Configurable Payloads:** Allows you to specify and encode payloads for testing.
-- [x] **Proxy Support:** Optionally use proxies for testing to avoid detection and IP blocking.
+- [x] **Proxy Support:** Optionally use proxies to test while avoiding detection and IP blocking.
 - [x] **Logging:** Detailed logging of test results and server status.
 - [x] **Multi-Platform Support:** Easy installation and setup on Windows, Debian-based, Fedora-based, and macOS systems.
-- [x] **Handle urls on file**
-- [x] **Improving the proxy and encoding the payloads**
-- [x] **Increase Threads for testing multliples urls**
-- [x] **Command line mode**
+- [x] **File-based URL Handling:** Supports URL lists from files.
+- [x] **Improved Proxy Handling and Payload Encoding:** Advanced configuration for better testing performance.
+- [x] **Increased Threading:** Supports multithreading for faster testing of multiple URLs.
+- [x] **Command-line Interface:** Simple and effective CLI for ease of use.
 
 ## Upcoming Features 🚀
 
-- [ ] **GUI Mode:** A graphical user interface for easier configuration and use.
-- [ ] **Advanced Reporting:** Detailed and customizable reports of test results.
+- [ ] **GUI Mode:** A graphical user interface for easier configuration and usage.
+- [ ] **Advanced Reporting:** Customizable and detailed reports of test results.
 
 ## Setup LazyXss 🛠
 
-Ensure you install the latest version of Google Chrome and the corresponding version of ChromeDriver for your device to avoid errors.
+Before using LazyXss, ensure that Google Chrome and the corresponding ChromeDriver are installed on your system.
 
 ### Installation Instructions
 
@@ -121,7 +120,7 @@ Ensure you install the latest version of Google Chrome and the corresponding ver
 
 4. **Start LazyXss**
    ```bash
-   python3 LazyXss.py -h 
+   python3 LazyXss.py -h
    ```
 
 #### Fedora-based Systems
@@ -174,10 +173,11 @@ Ensure you install the latest version of Google Chrome and the corresponding ver
    python3 LazyXss.py
    ```
 
-## Contributions and Feedback 🤧
+## Contributions and Feedback 🤝
 
-If you encounter any issues or have suggestions for improvements, please share them with us. Contributions are always welcome!
+If you encounter any issues or have suggestions for improvements, feel free to open an issue or submit a pull request. Contributions are highly encouraged!
 
 ## Warning ⚠️
 
-Running LazyXss may consume significant CPU resources. Ensure you are using a machine with adequate performance to avoid potential slowdowns or crashes. It is not recommended for use on low-specification systems.
+Running LazyXss may consume significant CPU resources. Ensure your system has sufficient performance to avoid potential slowdowns or crashes. It is not recommended for use on low-specification systems.
+```
