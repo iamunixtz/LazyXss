@@ -13,6 +13,7 @@ import signal
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+from requests.exceptions import SSLError
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -34,6 +35,8 @@ RESET = "\033[0m"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
+# Suppress excessive retry messages from urllib3
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 # Global semaphore to limit concurrent Selenium instances
 # Initialized in main() based on args
@@ -47,6 +50,9 @@ selenium_processes = []
 
 # Track vulnerable URLs for the report
 vulnerable_urls = []
+
+# Flag to indicate if scan was interrupted
+interrupted_scan = False
 
 # Global variable to store chrome path if provided
 chrome_executable_path = None
@@ -65,8 +71,9 @@ USER_AGENTS = [
 ### Signal Handlers for Ctrl+C and Ctrl+Z
 def signal_handler(sig, frame):
     """Handle Ctrl+C (SIGINT) and Ctrl+Z (SIGTSTP) gracefully."""
-    global vulnerable_urls, global_args # Need args for output base
+    global vulnerable_urls, global_args, interrupted_scan # Need args for output base
     if not shutdown_flag.is_set():
+        # Ensure prompt is on a new line without extra separators
         print("\nInterrupt detected. Do you want to quit the tool? [y/n]: ", end='', flush=True)
         shutdown_flag.set()
         # Don't cleanup selenium immediately, allow report generation first if quitting
@@ -76,16 +83,14 @@ def signal_handler(sig, frame):
                 choice = input().lower()
                 if choice in ["y", "yes"]:
                     print("Exiting...")
+                    interrupted_scan = True # Set flag for report
                     # --- Save Report on Exit --- #
                     if vulnerable_urls and global_args:
-                        print("Attempting to save report before exiting...")
+                        print("Attempting to save report for found vulnerabilities before exiting...")
                         try:
                             output_base = os.path.splitext(global_args.output)[0]
-                            # Need total counts, might be inaccurate on early exit
-                            # Use placeholders or calculate based on current state if possible
-                            # For simplicity, using placeholder values or len(vulnerable_urls)
-                            est_total = len(vulnerable_urls) # Placeholder
-                            generate_html_report(output_base, est_total, len(vulnerable_urls), 0, -1)
+                            # Pass interrupted flag and only vuln count
+                            generate_html_report(output_base, -1, len(vulnerable_urls), -1, -1, interrupted=True)
                         except Exception as e:
                             print(f"{RED}Could not save report on exit: {e}{RESET}")
                     # -------------------------- #
@@ -153,8 +158,10 @@ def print_banner():
     print(frame_border_bottom)
     print("\n")
 
-def generate_html_report(output_base, total_urls, total_vuln, total_non_vuln, time_taken):
-    """Generate the HTML report with the futuristic dashboard UI, including pagination."""
+def generate_html_report(output_base, total_urls, total_vuln, total_non_vuln, time_taken, interrupted=False):
+    """Generate the HTML report with the futuristic dashboard UI, including pagination.
+       Handles interrupted scans gracefully.
+    """
     global vulnerable_urls
     items_per_page = 10 # Number of vulnerabilities per page
 
@@ -628,6 +635,32 @@ footer {
 
             pagination_html += '</ul></nav>'
 
+        # --- Conditionally generate metric cards for non-interrupted scans --- #
+        non_vuln_card_html = ''
+        duration_card_html = ''
+        if not interrupted:
+            non_vuln_card_html = f'''
+        <div class="metric-card green-border">
+                        <div class="metric-header">
+            <div>Non-Vulnerable</div>
+            <i data-lucide="shield-check" class="icon-green icon-medium"></i>
+                        </div>
+                        <div class="metric-value">{total_non_vuln}</div>
+          <div class="metric-detail">URLs without confirmed XSS</div>
+           <div class="glow-effect green"></div>
+                    </div>'''
+            duration_card_html = f'''
+        <div class="metric-card cyan-border">
+                        <div class="metric-header">
+            <div>Scan Duration</div>
+            <i data-lucide="clock" class="icon-cyan icon-medium"></i>
+                        </div>
+                        <div class="metric-value">{time_taken}s</div>
+          <div class="metric-detail">Total time elapsed</div>
+           <div class="glow-effect cyan"></div>
+                    </div>'''
+        # ------------------------------------------------------------------ #
+
         # ---- Main HTML Structure ----
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -647,7 +680,7 @@ footer {
       <!-- <div class=\"header-left\"> -->
         <div class=\"logo\">
           <i data-lucide=\"hexagon\" class=\"icon-cyan icon-medium\"></i>
-          <span class=\"logo-text\">LazyXSS Scan Report</span>
+          <span class=\"logo-text\">LazyXSS Scan Report{f' ({RED}INTERRUPTED{RESET})' if interrupted else ''}</span>
         </div>
         <a href=\"https://buymeacoffee.com/iamunixtz\" target=\"_blank\" class=\"bmc-button\">
           <img src=\"https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=iamunixtz&button_colour=06b6d4&font_colour=0f172a&font_family=Inter&outline_colour=000000&coffee_colour=FFDD00\" alt=\"Buy Me A Coffee\" >
@@ -677,24 +710,8 @@ footer {
           <div class="metric-detail">Reflected & Confirmed XSS</div>
            <div class="glow-effect red"></div>
         </div>
-        <div class="metric-card green-border">
-          <div class="metric-header">
-            <div>Non-Vulnerable</div>
-            <i data-lucide="shield-check" class="icon-green icon-medium"></i>
-          </div>
-          <div class="metric-value">{total_non_vuln}</div>
-          <div class="metric-detail">URLs without confirmed XSS</div>
-           <div class="glow-effect green"></div>
-        </div>
-         <div class="metric-card cyan-border">
-          <div class="metric-header">
-            <div>Scan Duration</div>
-            <i data-lucide="clock" class="icon-cyan icon-medium"></i>
-          </div>
-          <div class="metric-value">{time_taken}s</div>
-          <div class="metric-detail">Total time elapsed</div>
-           <div class="glow-effect cyan"></div>
-        </div>
+        {non_vuln_card_html}
+        {duration_card_html}
       </div>
 
       <!-- Vulnerable URLs List -->
@@ -704,6 +721,7 @@ footer {
             <i data-lucide="bug" class="icon-red"></i>
             Detected Vulnerabilities
           </div>
+          {f'<div class="card-actions"><span class="badge red">Scan Interrupted</span></div>' if interrupted else ''}
         </div>
         <div class="card-content">
           <div class="vuln-list">
@@ -740,39 +758,62 @@ footer {
             print(f"\n{RED}Error writing HTML report '{report_filename}': {e}{RESET}")
 
 def print_usage_manual():
-    """Print the usage manual instructions."""
+    """Print the usage manual instructions in a more structured format."""
+    # Define column widths for alignment
+    opt_width = 22
+    desc_width = 55
+
     manual = (
-        "Usage: python3 lazyxssX53x.py [OPTIONS]\n\n"
-        "Example (URL): python3 lazyxssX53x.py -u \"http://test.com?q=test\" -p payloads.txt\n"
-        "Example (File): python3 lazyxssX53x.py -f urls.txt -p payloads.txt -o results.txt\n\n"
-        "Options:\n"
-        "  -u, --url            Specify a single URL to test.\n"
-        "  -f, --file           Specify a file containing URLs (one per line).\n"
-        "  -p, --payloads       Specify the payload file (default: payloads.txt).\n"
-        "  -t, --threads        Number of threads (default: 50).\n"
-        "  -e, --encoding       Number of times to URL-encode the payloads (default: 0).\n"
-        "  -o, --output         Output file to write vulnerable URLs (default: result.txt).\n"
-        "                       The HTML report will be named based on this file (e.g., result.html).\n"
-        "  -T, --time-sec       Timeout in seconds for Selenium checks (default: 2).\n"
-        "  --chrome-path        Specify the full path to the chrome/chromium executable.\n"
-        "                       (Use if automatic detection fails)\n"
-        "  --selenium-workers   Number of concurrent Selenium browser instances (default: 5).\n"
-        "                       Increase cautiously based on system resources.\n"
-        "  --proxy              Specify a proxy server (e.g., http://user:pass@127.0.0.1:8080).\n"
-        "                       (Note: Affects HTTP requests, not Selenium checks).\n"
-        "  -h, --help           Show this help message and exit.\n\n"
-        "Description:\n"
-        "  High-speed XSS scanner with HTTP reflection and Selenium verification.\n"
-        "  Generates a futuristic HTML report (if vulnerabilities are found).\n"
+        f"\n{GREEN}SYNOPSIS{RESET}\n"
+        f"  python3 lazyxssX53x.py [OPTIONS]\n\n"
+        f"{GREEN}DESCRIPTION{RESET}\n"
+        f"  High-speed XSS scanner with HTTP reflection and Selenium verification.\n"
+        f"  Tests all GET parameters in provided URLs and generates a futuristic\n"
+        f"  HTML report if vulnerabilities are found.\n\n"
+        f"{GREEN}OPTIONS{RESET}\n"
+        f"  {'-u, --url':<{opt_width}} {'Specify a single URL to test.':<{desc_width}}\n"
+        f"  {'-f, --file':<{opt_width}} {'Specify a file containing URLs (one per line).':<{desc_width}}\n"
+        f"  {'-p, --payloads':<{opt_width}} {'Specify the payload file (default: payloads.txt).':<{desc_width}}\n"
+        f"  {'-t, --threads':<{opt_width}} {'Number of concurrent URL processing threads (default: 20).':<{desc_width}}\n"
+        f"  {'-e, --encoding':<{opt_width}} {'Number of times to URL-encode the payloads (default: 0).':<{desc_width}}\n"
+        f"  {'-o, --output':<{opt_width}} {'Output file for vulnerable URLs (default: result.txt).':<{desc_width}}\n"
+        f"  {'':<{opt_width}} {'HTML report uses this base name (e.g., result_page_1.html).':<{desc_width}}\n"
+        f"  {'-T, --time-sec':<{opt_width}} {'Timeout in seconds for Selenium checks (default: 2).':<{desc_width}}\n"
+        f"  {'--chrome-path':<{opt_width}} {'Specify the full path to the chrome/chromium executable.':<{desc_width}}\n"
+        f"  {'':<{opt_width}} {'(Use if automatic detection fails)':<{desc_width}}\n"
+        f"  {'--selenium-workers':<{opt_width}} {'Number of concurrent Selenium browser instances (default: 5).':<{desc_width}}\n"
+        f"  {'':<{opt_width}} {'Increase cautiously based on system resources.':<{desc_width}}\n"
+        f"  {'--proxy':<{opt_width}} {'Specify a proxy server (e.g., http://127.0.0.1:8080).':<{desc_width}}\n"
+        f"  {'':<{opt_width}} {'(Note: Affects HTTP requests, not Selenium checks).':<{desc_width}}\n"
+        f"  {'--http-timeout':<{opt_width}} {'Timeout in seconds for HTTP requests (connect & read) (default: 20).':<{desc_width}}\n"
+        f"  {'-h, --help':<{opt_width}} {'Show this help message and exit.':<{desc_width}}\n\n"
+        f"{GREEN}EXAMPLES{RESET}\n"
+        f"  Scan a single URL (multiple parameters):\n"
+        f"    python3 lazyxss.py -u \"http://test.com?q=test&debug=0\" -p pay.txt\n\n"
+        f"  Scan multiple URLs from a file:\n"
+        f"    python3 lazyxss.py -f urls.txt -p payloads.txt -o results.txt\n\n"
+        f"  Scan using a specific Chrome path (Windows Example):\n"
+        f"    python3 lazyxssx.py -u \"http://example.com?id=1\" --chrome-path \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"\n\n"
+        f"  Scan using an HTTP Proxy:\n"
+        f"    python3 lazyxss.py -f urls.txt --proxy http://127.0.0.1:8080\n\n"
+        f"  Scan with increased Selenium concurrency:\n"
+        f"    python3 lazyxss.py -f urls.txt -t 30 --selenium-workers 10\n"
+
     )
+    # Update example commands to use correct script name
+    manual = manual.replace("python3 lazyxss.py", f"python3 {os.path.basename(sys.argv[0])}")
     print(manual)
 
 class CustomHelpAction(argparse.Action):
     """Custom help action that prints the usage manual and banner."""
     def __call__(self, parser, namespace, values, option_string=None):
-        print_usage_manual()
+        # Clear screen first
+        os.system('cls' if os.name == 'nt' else 'clear')
+        # Print banner FIRST
         print_banner()
-        parser.print_help()
+        # Print custom manual SECOND
+        print_usage_manual()
+        # DO NOT print default help (parser.print_help() removed)
         parser.exit()
 
 def get_chrome_version():
@@ -878,7 +919,10 @@ def load_file_contents(file_path):
         return None
     with open(file_path, 'r') as file:
         lines = [line.strip() for line in file if line.strip()]
-        return lines if lines else None
+        if not lines:
+            logging.error(f"{RED}Payload file '{file_path}' is empty.{RESET}")
+            return None
+        return lines
 
 def encode_payload(payload, encode_times):
     """Encode a payload multiple times using URL encoding."""
@@ -886,50 +930,6 @@ def encode_payload(payload, encode_times):
     for _ in range(encode_times):
         encoded = urllib.parse.quote(encoded)
     return encoded
-
-def generate_url_variations(base_url, payloads):
-    """Generates URL variations by injecting RAW payloads into each parameter."""
-    variations = []
-    try:
-        parsed_url = urllib.parse.urlparse(base_url)
-        query_params = urllib.parse.parse_qs(parsed_url.query, keep_blank_values=True)
-
-        # 1. Test original URL by appending payload (current behavior)
-        # This handles cases with no params or testing the whole query string context
-        for payload in payloads:
-            # Simple append might be less effective if params exist, but include for baseline
-            variations.append(f"{base_url}{payload}")
-
-        # 2. Test each parameter individually
-        for param_name in query_params:
-            original_values = query_params[param_name] # It's a list
-            for payload in payloads:
-                # Create a copy to modify
-                new_params = query_params.copy()
-                # Replace the current parameter's value(s) with the RAW payload
-                new_params[param_name] = [payload]
-
-                # Rebuild query string - doseq=True handles multiple values if needed, though we replace with one payload
-                new_query = urllib.parse.urlencode(new_params, doseq=True)
-                # Reconstruct the URL
-                new_url = urllib.parse.urlunparse((
-                    parsed_url.scheme,
-                    parsed_url.netloc,
-                    parsed_url.path,
-                    parsed_url.params,
-                    new_query,
-                    parsed_url.fragment
-                ))
-                variations.append(new_url)
-
-        # Deduplicate (though unlikely with this method unless payload equals original value)
-        variations = list(set(variations))
-        logging.debug(f"Generated {len(variations)} variations for {base_url}")
-        return variations
-
-    except Exception as e:
-        logging.error(f"{RED}Error parsing or generating variations for URL '{base_url}': {e}{RESET}")
-        return [base_url] # Return original URL on error
 
 ### HTTP and Selenium Scanning Functions
 
@@ -954,18 +954,40 @@ def create_session(proxy_url=None):
 
     return session
 
-def check_reflection(url, payload, session, timeout):
-    """Check if payload is reflected with high accuracy."""
+def check_reflection(url, payload, session, http_timeout):
+    """Check if payload is reflected with high accuracy, using specific timeout.
+       Returns True if reflected, False if not reflected, None on network errors."""
     if shutdown_flag.is_set():
-        return False
+        return None # Indicate shutdown/cancellation
     try:
-        response = session.get(f"{url}{payload}", timeout=timeout)
+        # Explicitly set connect and read timeouts using a tuple
+        response = session.get(url, timeout=(http_timeout, http_timeout))
+        # Check for reflection based on the effective_payload derived from the URL
+        # Need to unquote both the payload and response for comparison
         decoded_payload = urllib.parse.unquote(payload)
-        return payload in response.text or decoded_payload in response.text
-    except (requests.RequestException, requests.Timeout):
-        return False
+        decoded_response = urllib.parse.unquote(response.text)
+        return decoded_payload in decoded_response # Returns True or False
+    except requests.exceptions.ConnectTimeout:
+        logging.warning(f"{RED}[!] Connection Timeout: {url} (Check host/firewall/network){RESET}")
+        return None # Indicate network error
+    except requests.exceptions.ReadTimeout:
+        logging.warning(f"{RED}[!] Read Timeout ({http_timeout}s) during reflection check for: {url}{RESET}")
+        logging.warning(f"{RED}    _ Reason: Connection established, but server did not send data in time. Server might be slow, overloaded, or a WAF delayed the response.{RESET}")
+        return None # Indicate network error
+    except requests.exceptions.SSLError:
+        # Specific handling for SSL verification errors
+        logging.warning(f"{RED}[!] SSL Certificate Verify Failed: {url} (Check system certs or target config){RESET}")
+        return None # Indicate network error (SSL)
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"{RED}[!] Request Exception during reflection check for {url}: {e}{RESET}")
+        logging.warning(f"{RED}    _ Reason: General network issue (DNS, SSL, Proxy error, etc.). Check URL validity and network settings.{RESET}")
+        return None # Indicate network error
+    except Exception as e:
+        # Keep generic error for unexpected issues
+        logging.error(f"{RED}Unexpected error during reflection check for {url}: {e}{RESET}")
+        return None # Indicate other error
 
-def check_xss_with_selenium(url, payloads, timeout=2):
+def check_xss_with_selenium(url, payloads, selenium_timeout):
     """High-speed, accurate Selenium check for XSS using WebDriverWait."""
     global chrome_executable_path # Access the global variable
     chrome_options = Options()
@@ -996,7 +1018,7 @@ def check_xss_with_selenium(url, payloads, timeout=2):
         driver = None
         try:
             driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.set_page_load_timeout(timeout)
+            driver.set_page_load_timeout(selenium_timeout)
             try:
                 pid = driver.service.process.pid
                 proc = psutil.Process(pid)
@@ -1006,7 +1028,7 @@ def check_xss_with_selenium(url, payloads, timeout=2):
             results = []
             # Use the full timeout provided for waiting for the alert
             # wait_timeout = max(0.1, timeout * 0.5) # Wait for half the page load timeout, min 0.1s
-            wait_timeout = timeout # Use the full timeout specified by -T
+            wait_timeout = selenium_timeout # Use the full timeout specified by -T
             logging.debug(f"WebDriverWait timeout for alert: {wait_timeout}s")
 
             for payload in payloads:
@@ -1057,7 +1079,7 @@ def check_xss_with_selenium(url, payloads, timeout=2):
                 except (ValueError, psutil.NoSuchProcess):
                     pass
 
-def safe_launch_selenium(url, payloads, timeout):
+def safe_launch_selenium(url, payloads, selenium_timeout):
     """Launch Selenium with extreme efficiency."""
     if shutdown_flag.is_set():
         return [(False, p, None) for p in payloads]
@@ -1066,7 +1088,7 @@ def safe_launch_selenium(url, payloads, timeout):
             if shutdown_flag.is_set():
                 return [(False, p, None) for p in payloads]
             time.sleep(0.5)
-        return check_xss_with_selenium(url, payloads, timeout)
+        return check_xss_with_selenium(url, payloads, selenium_timeout)
 
 ### Logging and Worker Functions
 
@@ -1081,122 +1103,117 @@ def log_vulnerability(full_url, is_vuln, payload, output_file):
         output_file.flush()
         vulnerable_urls.append((full_url, payload))
 
-def test_url_payload(url, payloads, proxies, encode_times, timeout, output_file):
-    """Test a single specific URL variation (reflection check + potential Selenium).
-       Note: 'payloads' argument is somewhat redundant here now, but kept for structure."""
+def test_single_url_payload(base_url, payload, proxies, encode_times, http_timeout, selenium_timeout, output_file):
+    """Test a single base_url + payload combination."""
     session = create_session(proxies)
-    # Since the payload is already IN the URL, we just need one 'effective' payload for reflection check
-    # Extract the presumed payload part for logging/comparison (this is an approximation)
-    # Handle potential errors if URL doesn't contain '='
-    try:
-        effective_payload = urllib.parse.unquote(url.split('=')[-1]) # Get last value and decode once for comparison/logging
-    except IndexError:
-        effective_payload = "" # No params?
+    full_url = f"{base_url}{payload}" # Simple append
+    encoded_payload = encode_payload(payload, encode_times)
+    full_encoded_url = f"{base_url}{encoded_payload}"
 
-    # --- Apply encoding only if requested --- #
-    encoded_url = url
-    if encode_times > 0:
-        # This part needs refinement - how to encode just the payload part within the URL?
-        # For now, let's skip targeted encoding here as it's complex.
-        # The original encode_payload function worked on the standalone payload.
-        # We will rely on check_reflection handling potential encoding issues for now.
-        # A more robust solution would involve parsing, encoding the specific value, and rebuilding.
-        pass # Placeholder - Encoding before request needs careful implementation here.
-        logging.debug(f"Encoding ({encode_times} rounds) requested but not applied pre-request in this version.")
-    # --------------------------------------- #
+    # Perform reflection check using the encoded URL and original payload for checking
+    # Pass the *original* payload for reflection check logic, but the encoded URL
+    reflected = check_reflection(full_encoded_url, payload, session, http_timeout)
 
-    # Perform reflection check on the specific URL variation
-    # Pass the *original* potentially unencoded payload for reflection check
-    reflected = check_reflection(url, effective_payload, session, timeout)
-
-    if reflected:
-        # If reflected, perform Selenium check on this specific URL variation
-        # Pass the extracted payload for logging consistency
-        results = safe_launch_selenium(url, [effective_payload], timeout)
+    if reflected is True:
+        # If reflected, perform Selenium check on the potentially encoded URL
+        results = safe_launch_selenium(full_encoded_url, [payload], selenium_timeout)
         for is_vuln, payload_used_in_selenium, _ in results:
-            # Log using the full URL variation and the extracted payload
-            log_vulnerability(url, is_vuln, payload_used_in_selenium, output_file)
-    else:
-        # Log as not vulnerable if not reflected
-        log_vulnerability(url, False, effective_payload, output_file)
+            log_vulnerability(full_encoded_url, is_vuln, payload_used_in_selenium, output_file)
+    elif reflected is False:
+        # Only log non-vuln if request succeeded but no reflection
+        log_vulnerability(full_encoded_url, False, payload, output_file)
+    # else: reflected is None (network error/shutdown), error already logged
 
-def worker(url_variation, payloads, proxies, encode_times, timeout, output_file):
-    """Worker function now processes a single URL variation."""
-    if not shutdown_flag.is_set():
-        # Pass the single URL variation and the original payloads list (though redundant inside)
-        test_url_payload(url_variation, payloads, proxies, encode_times, timeout, output_file)
+def worker(base_url, payloads, proxies, encode_times, http_timeout, selenium_timeout, output_file):
+    """Worker function processes all payloads for a single base URL."""
+    for payload in payloads:
+        if shutdown_flag.is_set():
+            break
+        test_single_url_payload(base_url, payload, proxies, encode_times, http_timeout, selenium_timeout, output_file)
 
-def test_xss(urls_to_scan, payloads_to_test, proxies, encode_times, num_threads, timeout, output_file, output_base):
-    """Test multiple URLs (potentially with variations) for XSS."""
-    global vulnerable_urls
+def test_xss(base_urls, payloads_to_test, proxies, encode_times, num_threads, http_timeout, selenium_timeout, output_file, output_base):
+    """Test multiple base URLs against multiple payloads for XSS."""
+    global vulnerable_urls, interrupted_scan
     start_time = time.time()
-    # This now receives the expanded list of URLs (parameter variations)
-    # total_urls_tested = 0 # This variable is not used, remove?
-    base_url_count = len(urls_to_scan) # Keep track of original URLs provided
+
+    total_urls_scanned = len(base_urls)
+    total_payloads = len(payloads_to_test)
+    estimated_total_tests = total_urls_scanned * total_payloads
+
+    logging.info(f"{CYAN}[info] Total Tests to Perform: {estimated_total_tests}{RESET}")
+
+    # Create tuples of (base_url, payload_list) for the worker
+    # The worker will iterate through payloads for its assigned base_url
+    tasks = [(url, payloads_to_test) for url in base_urls]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        # Submit tasks: worker processes one base_url against all payloads
         futures = [
-            executor.submit(worker, url, payloads_to_test, proxies, encode_times, timeout, output_file)
-            for url in urls_to_scan
+            executor.submit(worker, url, ploads, proxies, encode_times, http_timeout, selenium_timeout, output_file)
+            for url, ploads in tasks
         ]
         try:
-            # Update progress bar using tqdm or similar could go here
-            processed_count = 0
+            processed_url_count = 0
+            # Optional: Progress tracking could be added here using as_completed
             for future in concurrent.futures.as_completed(futures):
                 if shutdown_flag.is_set():
                     break
                 try:
                     future.result() # Check for exceptions from worker
                 except Exception as exc:
-                     logging.error(f"{RED}Worker thread generated an exception: {exc}{RESET}")
-                processed_count += 1 # Assuming one future corresponds to one URL
-                # Simple progress indicator (can be replaced with tqdm)
-                # print(f"Progress: {processed_count}/{len(urls)} URLs", end='\r')
-
-            # Ensure progress indicator line is cleared
-            # print(" " * 50, end='\r')
+                     logging.error(f"{RED}Worker thread for a base URL generated an exception: {exc}{RESET}")
+                processed_url_count += 1
+                # Add progress indicator if desired, e.g.:
+                # print(f"Progress: {processed_url_count}/{total_urls_scanned} base URLs completed", end='\r')
 
         finally:
-            # Wait for remaining futures to complete or cancel if shutting down
             if shutdown_flag.is_set():
                 logging.info("\nCancelling remaining tasks...")
                 for f in futures:
                     f.cancel()
-            # Ensure executor shuts down properly, waiting for running tasks if not cancelled
             executor.shutdown(wait=not shutdown_flag.is_set())
-            # Final cleanup after all threads are done or cancelled
             cleanup_selenium()
 
     end_time = time.time()
     time_taken = int(end_time - start_time)
     total_vuln = len(vulnerable_urls)
-    # if reflection checks prune payloads, but gives a rough idea.
-    # The number of actual tests depends on variations * payloads
-    # urls_to_scan already contains the variations
-    estimated_total_tests = len(urls_to_scan) # A better estimate of requests
-    total_non_vuln = estimated_total_tests - total_vuln
+    # Total non-vuln is harder to calculate accurately if tasks fail/are interrupted
+    # We'll report based on total tests attempted vs vulnerabilities found
+    total_non_vuln = max(0, estimated_total_tests - total_vuln) if not interrupted_scan else -1
 
-    # Generate HTML report after scan completes (if any vulnerabilities found)
+    # Generate HTML report
     if vulnerable_urls:
-        # Inform user about multi-page report
         report_name_base = f"{output_base}_page_1.html"
-        print(f"\n{GREEN}Generated HTML report (multiple pages): {report_name_base} ...{RESET}")
-        # Call the report generation function (which now handles pagination internally)
-        generate_html_report(output_base, estimated_total_tests, total_vuln, total_non_vuln, time_taken)
-    else:
+        print(f"\n{GREEN}Generated HTML report (check {report_name_base} ...){RESET}")
+        generate_html_report(output_base, estimated_total_tests, total_vuln, total_non_vuln, time_taken, interrupted=interrupted_scan)
+    elif not interrupted_scan:
         print(f"\n{CYAN}Scan completed. No vulnerabilities found.{RESET}")
-        # --- Print Summary Table --- #
-        print("\n" + "="*40)
-        print(f"Scan Summary".center(40))
-        print("-"*40)
-        print(f"| {'Metric':<25} | {'Value':<10} |")
-        print("-"*40)
-        print(f"| {'Base URLs Scanned:':<25} | {base_url_count:<10} |") # Report base URLs
-        print(f"| {'Total Tests (Variations):':<25} | {estimated_total_tests:<10} |") # Report total variations tested
-        print(f"| {'Vulnerabilities Found:':<25} | {GREEN}{total_vuln}{RESET}{ ' ' * (10 - len(str(total_vuln)) - (len(GREEN)+len(RESET)) if total_vuln > 0 else 10 - len(str(total_vuln))) } |") # Adjust spacing for color codes
-        print(f"| {'Time Taken:':<25} | {time_taken:<7} sec |")
-        print("="*40)
-        # --------------------------- #
+
+    # Print Summary Table (only if not interrupted)
+    if not interrupted_scan:
+        col1_width = 25
+        col2_width = 12 # Adjusted for potentially larger numbers
+        total_width = col1_width + col2_width + 3
+
+        print("\n" + "╔" + "═"*col1_width + "╦" + "═"*col2_width + "╗")
+        print(f"║ {CYAN}{'Scan Summary':^{total_width-4}} {RESET} ║")
+        print("╠" + "═"*col1_width + "╬" + "═"*col2_width + "╣")
+        print(f"║ {'Metric':<{col1_width-2}} ║ {'Value':<{col2_width-2}} ║")
+        print("╠" + "═"*col1_width + "╬" + "═"*col2_width + "╣")
+        print(f"║ {'Base URLs Scanned:':<{col1_width-2}} ║ {total_urls_scanned:<{col2_width-2}} ║")
+        print(f"║ {'Payloads Loaded:':<{col1_width-2}} ║ {total_payloads:<{col2_width-2}} ║")
+        print(f"║ {'Total Tests Attempted:':<{col1_width-2}} ║ {estimated_total_tests:<{col2_width-2}} ║")
+
+        vuln_val_str = str(total_vuln)
+        vuln_val_display = f"{GREEN}{total_vuln}{RESET}" if total_vuln > 0 else vuln_val_str
+        padding_needed = col2_width - 2 - len(vuln_val_str)
+        print(f"║ {'Vulnerabilities Found:':<{col1_width-2}} ║ {vuln_val_display}{' '*padding_needed} ║")
+
+        time_str = f"{time_taken} sec"
+        padding_needed_time = col2_width - 2 - len(time_str)
+        print(f"║ {'Time Taken:':<{col1_width-2}} ║ {time_str}{' '*padding_needed_time} ║")
+
+        print("╚" + "═"*col1_width + "╩" + "═"*col2_width + "╝")
 
 # Store args globally for access in worker threads if needed (e.g., for chrome_path)
 # Alternatively, pass args down through function calls
@@ -1229,6 +1246,7 @@ def main():
     parser.add_argument('--chrome-path', type=str, help="Specify the full path to the chrome executable.")
     parser.add_argument('--selenium-workers', type=int, default=5, help="Number of concurrent Selenium instances (default: 5).")
     parser.add_argument('--proxy', type=str, help="Proxy server URL (e.g., http://127.0.0.1:8080).")
+    parser.add_argument('--http-timeout', type=int, default=20, help="Timeout in seconds for HTTP requests (connect & read) (default: 20).")
 
     args = parser.parse_args()
     global_args = args # Store args globally
@@ -1311,21 +1329,11 @@ def main():
         print_usage_manual()
         sys.exit(1)
 
-    # --- Generate URL Variations --- #
-    urls_to_test = []
-    print(f"{CYAN}[info] Generating URL variations for {len(base_urls)} base URL(s)...{RESET}")
-    for base_url in base_urls:
-        urls_to_test.extend(generate_url_variations(base_url, payloads))
-    if not urls_to_test:
-        print(f"{RED}Error: Failed to generate any URLs to test.{RESET}")
-        sys.exit(1)
-    logging.info(f"{CYAN}[info] Total URLs/Variations to test: {len(urls_to_test)}{RESET}")
-    # ----------------------------- #
-
-    # Validate encoding times
-    if args.encoding < 0:
-        print(f"{RED}Error: Encoding times cannot be negative.{RESET}")
-        sys.exit(1)
+    # --- Create list of tests (Base URL + Payload combinations) --- #
+    # This is illustrative - the actual combination happens in the worker now
+    # total_tests_planned = len(base_urls) * len(payloads)
+    # logging.info(f"{CYAN}[info] Total Tests Planned: {total_tests_planned}{RESET}")
+    # ------------------------------------------------------------ #
 
     # Validate threads
     if args.threads < 1:
@@ -1339,14 +1347,9 @@ def main():
 
     # Display Chrome version (now done silently by get_chrome_version)
     # chrome_version = get_chrome_version()
-    # print(f"{CYAN}Chrome Version: {chrome_version}{RESET}\\n\")
+    # print(f"{CYAN}Chrome Version: {chrome_version}{RESET}\n")
     get_chrome_version() # Run detection, logs warning if N/A
     print("\n") # Add a newline after detection attempt
-
-    # ---- WAF Detection ----
-    first_url = urls_to_test[0] # Use the first URL for WAF check
-    detect_waf(first_url, args.proxy)
-    # ---------------------
 
     logging.info(f"{CYAN}[info] Scan Starting...{RESET}")
 
@@ -1363,55 +1366,19 @@ def main():
     # Start scanning
     try:
         test_xss(
-            urls_to_scan=urls_to_test, # Pass the expanded list
+            base_urls=base_urls,
             payloads_to_test=payloads,
             proxies=args.proxy,
             encode_times=args.encoding,
-            num_threads=min(args.threads, len(urls_to_test)), # Adjust threads based on variations
-            timeout=args.time_sec,
+            num_threads=min(args.threads, len(base_urls)), # Threads per base URL
+            http_timeout=args.http_timeout, # Pass HTTP timeout
+            selenium_timeout=args.time_sec, # Pass Selenium timeout (existing -T)
             output_file=output_file,
             output_base=output_base
         )
     finally:
         output_file.close()
         cleanup_selenium()
-
-def detect_waf(url, proxy_url=None):
-    """Performs basic checks to detect common WAFs."""
-    test_payload = "<script>alert('WAF-Test')</script>\"'><img src=x onerror=alert(1)>"
-    test_url = f"{url.split('?')[0]}?waf_test={test_payload}" # Use a clean param
-    headers = {
-        'User-Agent': random.choice(USER_AGENTS) # Use random user agent
-    }
-    session = create_session(proxy_url)
-    detected_waf = None
-
-    try:
-        response = session.get(test_url, headers=headers, timeout=10)
-        status = response.status_code
-        resp_headers = response.headers
-        resp_body = response.text.lower()
-
-        # Cloudflare
-        if 'cf-ray' in resp_headers or 'cloudflare' in resp_headers.get('server', '').lower() or '>cloudflare</a>' in resp_body:
-            detected_waf = "Cloudflare"
-        # Akamai
-        elif 'akamai' in resp_headers.get('server', '').lower() or 'x-akamai' in resp_headers or 'akamaighost' in resp_headers.get('server', '').lower():
-            detected_waf = "Akamai"
-        # Generic Block (e.g., 403 Forbidden often indicates WAF/filtering)
-        elif status == 403:
-            detected_waf = "Generic Block (403 Forbidden)"
-        # Add more specific checks here if needed (AWS WAF, Imperva, etc.)
-
-        if detected_waf:
-            logging.warning(f"{RED}[!] WAF Detected: {detected_waf} - Scan results might be affected.{RESET}")
-        else:
-            logging.info(f"{GREEN}[info] No obvious WAF detected in initial check.{RESET}")
-
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"{RED}[!] WAF detection request failed: {e}{RESET}")
-    except Exception as e:
-        logging.warning(f"{RED}[!] Error during WAF detection: {e}{RESET}")
 
 if __name__ == "__main__":
     main()
