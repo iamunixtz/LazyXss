@@ -1,13 +1,15 @@
-# LazyXSS - Advanced Reflected XSS Scanner
+<h1 align="center">LazyXSS - Advanced Reflected XSS Scanner</h1>
 
-<div align="center">
-
-[![GitHub stars](https://img.shields.io/github/stars/iamunixtz/LazyXss?style=social)](https://github.com/iamunixtz/LazyXss/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/iamunixtz/LazyXss?style=social)](https://github.com/iamunixtz/LazyXss/network/members)
-[![GitHub issues](https://img.shields.io/github/issues/iamunixtz/LazyXss)](https://github.com/iamunixtz/LazyXss/issues)
-[![License](https://img.shields.io/github/license/iamunixtz/LazyXss)](https://github.com/iamunixtz/LazyXss/blob/main/LICENSE) <!-- Assuming you have a LICENSE file -->
-
-</div>
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge" alt="Python 3.x" />
+  <img src="https://img.shields.io/github/license/iamunixtz/LazyXss?style=for-the-badge" alt="License" />
+  <img src="https://img.shields.io/badge/Contributions-Welcome-brightgreen?style=for-the-badge" alt="Contributions Welcome" />
+  <br>
+  <img src="https://img.shields.io/github/stars/iamunixtz/LazyXss?style=for-the-badge" alt="GitHub Stars" />
+  <img src="https://img.shields.io/github/issues/iamunixtz/LazyXss?style=for-the-badge" alt="GitHub Issues" />
+  <br>
+  <img src="https://img.shields.io/badge/Made_in-Tanzania-orange?style=for-the-badge" alt="Made in Tanzania" />
+</p>
 
 LazyXSS is a powerful and efficient Python tool designed to automate the detection and confirmation of **reflected** Cross-Site Scripting (XSS) vulnerabilities in web applications. It meticulously tests **all GET parameters** found in provided URLs, supports scanning multiple targets from a file, and generates comprehensive, multi-page HTML reports with a modern UI.
 
@@ -96,64 +98,46 @@ LazyXSS is a powerful and efficient Python tool designed to automate the detecti
 ## Usage
 
 ```text
-usage: python3 lazyxssX53x.py [OPTIONS]
+SYNOPSIS
+  python3 lazyxssX53x.py [OPTIONS]
 
-Example (URL): python3 lazyxssX53x.py -u "http://test.com?q=test&debug=0" -p payloads.txt
-Example (File): python3 lazyxssX53x.py -f urls.txt -p payloads.txt -o results.txt
-
-Options:
-  -u, --url            Specify a single URL to test.
-  -f, --file           Specify a file containing URLs (one per line).
-  -p, --payloads       Specify the payload file (default: payloads.txt).
-  -t, --threads        Number of concurrent URL processing threads (default: 20).
-  -e, --encoding       Number of times to URL-encode the payloads (default: 0).
-  -o, --output         Output file to write vulnerable URLs (default: result.txt).
-                       The HTML report will be named based on this file (e.g., result_page_1.html).
-  -T, --time-sec       Timeout in seconds for Selenium checks (default: 2).
-  --chrome-path        Specify the full path to the chrome/chromium executable.
-                       (Use if automatic detection fails)
-  --selenium-workers   Number of concurrent Selenium browser instances (default: 5).
-                       Increase cautiously based on system resources.
-  --proxy              Specify a proxy server (e.g., http://user:pass@127.0.0.1:8080).
-                       (Note: Affects HTTP requests, not Selenium checks).
-  -h, --help           Show this help message and exit.
-
-Description:
+DESCRIPTION
   High-speed XSS scanner with HTTP reflection and Selenium verification.
-  Generates a futuristic HTML report (if vulnerabilities are found).
-```
+  Tests all GET parameters in provided URLs and generates a futuristic
+  HTML report if vulnerabilities are found.
 
-## Example Usage
+OPTIONS
+  -u, --url URL          Specify a single URL to test.
+  -f, --file FILE        Specify a file containing URLs (one per line).
+  -p, --payloads FILE    Specify the payload file (default: payloads.txt).
+  -t, --threads INT      Number of concurrent URL processing threads (default: 20).
+  -e, --encoding INT     Number of times to URL-encode the payloads (default: 0).
+  -o, --output FILE      Output file for vulnerable URLs (default: result.txt).
+                         HTML report uses this base name (e.g., result_page_1.html).
+  -T, --time-sec INT     Timeout in seconds for Selenium checks (default: 2).
+  --chrome-path PATH   Specify the full path to the chrome/chromium executable.
+                         (Use if automatic detection fails)
+  --selenium-workers INT Number of concurrent Selenium browser instances (default: 5).
+                         Increase cautiously based on system resources.
+  --proxy URL          Specify a proxy server (e.g., http://127.0.0.1:8080).
+                         (Note: Affects HTTP requests, not Selenium checks).
+  -h, --help             Show this help message and exit.
 
-### Scan a single URL (multiple parameters):
+EXAMPLES
+  Scan a single URL (multiple parameters):
+    python3 lazyxssX53x.py -u "http://test.com?q=test&debug=0" -p pay.txt
 
-```bash
-python3 lazyxssX53x.py -u "http://testphp.vulnweb.com/search.php?test=query&search=test" -p pay.txt -o vuln.txt
-```
-*(This will test parameters `test` and `search` separately, plus append to the end)*
+  Scan multiple URLs from a file:
+    python3 lazyxssX53x.py -f urls.txt -p payloads.txt -o results.txt
 
-### Scan multiple URLs from a file:
+  Scan using a specific Chrome path (Windows Example):
+    python3 lazyxssX53x.py -u "http://example.com?id=1" --chrome-path "C:\Program Files\Google\Chrome\Application\chrome.exe"
 
-```bash
-python3 lazyxssX53x.py -f urls.txt -p payloads.txt -o scan_results.txt
-```
+  Scan using an HTTP Proxy:
+    python3 lazyxssX53x.py -f urls.txt --proxy http://127.0.0.1:8080
 
-### Scan using a specific Chrome path (Windows Example):
-
-```bash
-python3 lazyxssX53x.py -u "http://example.com/page?id=1" --chrome-path "C:\Program Files\Google\Chrome\Application\chrome.exe"
-```
-
-### Scan using an HTTP Proxy:
-
-```bash
-python3 lazyxssX53x.py -f urls.txt --proxy http://127.0.0.1:8080
-```
-
-### Scan with increased Selenium concurrency (use with caution!):
-
-```bash
-python3 lazyxssX53x.py -f urls.txt -t 30 --selenium-workers 10
+  Scan with increased Selenium concurrency:
+    python3 lazyxssX53x.py -f urls.txt -t 30 --selenium-workers 10
 ```
 
 ## Reporting
