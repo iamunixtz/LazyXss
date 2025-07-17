@@ -16,16 +16,18 @@ from requests.packages.urllib3.util.retry import Retry
 from requests.exceptions import SSLError
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException, NoAlertPresentException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import psutil
 import re
 import math
 import html
 import random
 import socket
+
+from lazyxss_browser_manager import BrowserManager
 
 # ANSI escape codes for colors
 GREEN = "\033[92m"
@@ -45,17 +47,11 @@ selenium_semaphore = None
 # Flag for graceful shutdown
 shutdown_flag = threading.Event()
 
-# Track Selenium processes for cleanup
-selenium_processes = []
-
 # Track vulnerable URLs for the report
 vulnerable_urls = []
 
 # Flag to indicate if scan was interrupted
 interrupted_scan = False
-
-# Global variable to store chrome path if provided
-chrome_executable_path = None
 
 # --- User Agent List ---
 USER_AGENTS = [
@@ -111,21 +107,6 @@ signal.signal(signal.SIGINT, signal_handler)
 # Only register SIGTSTP on non-Windows platforms
 if sys.platform != 'win32':
     signal.signal(signal.SIGTSTP, signal_handler)
-
-### Cleanup Function
-def cleanup_selenium():
-    """Close all Selenium-related Chrome processes."""
-    global selenium_processes
-    for proc in selenium_processes[:]:
-        try:
-            if proc.is_running():
-                proc.terminate()
-                proc.wait(timeout=2)
-        except (psutil.NoSuchProcess, psutil.TimeoutExpired):
-            pass
-        finally:
-            selenium_processes.remove(proc)
-    selenium_processes.clear()
 
 ### Utility Functions
 
@@ -590,9 +571,18 @@ footer {
         # ---- Generate Vulnerability List HTML for the current page ----
         vuln_list_html = ""
         if page_vulnerabilities:
-            for idx, (url, payload) in enumerate(page_vulnerabilities, start=start_idx + 1):
+            for idx, (url, payload, param) in enumerate(page_vulnerabilities, start=start_idx + 1):
                 safe_url = html.escape(url)
                 safe_payload = html.escape(payload)
+                param_html = ""
+                if param:
+                    safe_param = html.escape(param)
+                    param_html = f"""
+                    <div style="margin-top: 0.5rem;">
+                        <div class="vuln-label">Parameter:</div>
+                        <div class="vuln-data">{safe_param}</div>
+                    </div>
+                    """
                 vuln_list_html += f"""
                 <div class="vuln-item">
                   <div class="vuln-icon icon-red"><i data-lucide="shield-alert" class="icon-medium"></i></div>
@@ -601,6 +591,7 @@ footer {
                           <div class="vuln-label">URL:</div>
                           <div class="vuln-data"><a href="{safe_url}" target="_blank">{safe_url}</a></div>
                       </div>
+                      {param_html}
                       <div style="margin-top: 0.5rem;">
                           <div class="vuln-label">Payload:</div>
                           <div class="vuln-data">{safe_payload}</div>
@@ -779,8 +770,6 @@ def print_usage_manual():
         f"  {'-o, --output':<{opt_width}} {'Output file for vulnerable URLs (default: result.txt).':<{desc_width}}\n"
         f"  {'':<{opt_width}} {'HTML report uses this base name (e.g., result_page_1.html).':<{desc_width}}\n"
         f"  {'-T, --time-sec':<{opt_width}} {'Timeout in seconds for Selenium checks (default: 2).':<{desc_width}}\n"
-        f"  {'--chrome-path':<{opt_width}} {'Specify the full path to the chrome/chromium executable.':<{desc_width}}\n"
-        f"  {'':<{opt_width}} {'(Use if automatic detection fails)':<{desc_width}}\n"
         f"  {'--selenium-workers':<{opt_width}} {'Number of concurrent Selenium browser instances (default: 5).':<{desc_width}}\n"
         f"  {'':<{opt_width}} {'Increase cautiously based on system resources.':<{desc_width}}\n"
         f"  {'--proxy':<{opt_width}} {'Specify a proxy server (e.g., http://127.0.0.1:8080).':<{desc_width}}\n"
@@ -792,8 +781,6 @@ def print_usage_manual():
         f"    python3 lazyxss.py -u \"http://test.com?q=test&debug=0\" -p pay.txt\n\n"
         f"  Scan multiple URLs from a file:\n"
         f"    python3 lazyxss.py -f urls.txt -p payloads.txt -o results.txt\n\n"
-        f"  Scan using a specific Chrome path (Windows Example):\n"
-        f"    python3 lazyxssx.py -u \"http://example.com?id=1\" --chrome-path \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"\n\n"
         f"  Scan using an HTTP Proxy:\n"
         f"    python3 lazyxss.py -f urls.txt --proxy http://127.0.0.1:8080\n\n"
         f"  Scan with increased Selenium concurrency:\n"
@@ -816,113 +803,16 @@ class CustomHelpAction(argparse.Action):
         # DO NOT print default help (parser.print_help() removed)
         parser.exit()
 
-def get_chrome_version():
-    """Get the numeric Chrome version, checking common paths for Windows/Linux."""
-    version = "N/A"
-    commands = []
-
-    if sys.platform == 'win32':
-        # Windows: Check registry, common Program Files locations
-        try:
-            import winreg
-            reg_paths = [
-                r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe",
-                # Add other potential registry keys if needed
-            ]
-            chrome_path = None
-            for path in reg_paths:
-                 try:
-                     key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
-                     chrome_path = winreg.QueryValue(key, None) # Get default value
-                     winreg.CloseKey(key)
-                     if chrome_path and os.path.exists(chrome_path):
-                         # Ensure path with spaces is quoted for the command
-                         commands.append(f'\"{chrome_path}\" --version')
-                         break # Found via registry
-                 except OSError:
-                     continue # Key not found or access denied
-
-            # Fallback to common paths if registry fails or wasn't found
-            if not chrome_path or not any(chrome_path in cmd for cmd in commands):
-                 common_paths = [
-                    os.path.expandvars("%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"),
-                    os.path.expandvars("%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe"),
-                    os.path.expandvars("%LocalAppData%\\Google\\Chrome\\Application\\chrome.exe"),
-                 ]
-                 for path in common_paths:
-                     if os.path.exists(path):
-                         # Ensure path with spaces is quoted for the command
-                         commands.append(f'\"{path}\" --version')
-
-        except ImportError:
-             # If winreg is not available (shouldn't happen on Windows usually)
-             pass # Will try default command later
-        except Exception as e:
-            # Log potential issues during Windows detection
-            logging.debug(f"Windows Chrome detection error: {e}")
-            pass
-
-    elif sys.platform == 'darwin': # macOS
-        commands.append("/Applications/Google\\\\ Chrome.app/Contents/MacOS/Google\\\\ Chrome --version")
-    else: # Linux/Other
-        commands.extend([
-            "google-chrome --version",
-            "google-chrome-stable --version",
-            "chromium-browser --version",
-            "chromium --version"
-        ])
-
-    # Try the collected commands
-    for cmd in commands:
-        try:
-            # Use shell=True cautiously, paths with spaces are quoted now
-            # Set encoding explicitly for Windows
-            output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL,
-                                              text=True, encoding='utf-8', errors='ignore', timeout=2)
-            match = re.search(r'(\d+\.\d+\.\d+\.\d+)', output.strip())
-            if match:
-                version = match.group(1)
-                logging.debug(f"Found Chrome version {version} using command: {cmd}")
-                break # Found version
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logging.debug(f"Command failed for Chrome detection: {cmd} - {e}")
-            continue # Command failed or not found, try next
-        except Exception as e:
-            logging.debug(f"Unexpected error during Chrome command execution: {cmd} - {e}")
-            continue
-
-    # If no version found via specific paths/commands, try a generic command as a last resort
-    if version == "N/A" and sys.platform == 'win32':
-        try:
-            # Generic command for Windows, might find it if it's in PATH
-            cmd = 'chrome --version'
-            output = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL,
-                                              text=True, encoding='utf-8', errors='ignore', timeout=2)
-            match = re.search(r'(\d+\.\d+\.\d+\.\d+)', output.strip())
-            if match:
-                version = match.group(1)
-                logging.debug(f"Found Chrome version {version} using generic command: {cmd}")
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logging.debug(f"Generic command failed for Chrome detection: {cmd} - {e}")
-        except Exception as e:
-            logging.debug(f"Unexpected error during generic Chrome command execution: {cmd} - {e}")
-
-    if version == "N/A":
-        logging.warning(f"{RED}Could not automatically detect Chrome version. Selenium checks might fail.{RESET}")
-
-    return version
-
 def load_file_contents(file_path):
-    """Load and return non-empty, stripped lines from a file."""
+    """Yield non-empty, stripped lines from a file."""
     if not os.path.isfile(file_path):
         logging.error(f"{RED}File '{file_path}' does not exist.{RESET}")
-        return None
+        return
     with open(file_path, 'r') as file:
-        lines = [line.strip() for line in file if line.strip()]
-        if not lines:
-            logging.error(f"{RED}Payload file '{file_path}' is empty.{RESET}")
-            return None
-        return lines
+        for line in file:
+            stripped_line = line.strip()
+            if stripped_line:
+                yield stripped_line
 
 def encode_payload(payload, encode_times):
     """Encode a payload multiple times using URL encoding."""
@@ -987,205 +877,166 @@ def check_reflection(url, payload, session, http_timeout):
         logging.error(f"{RED}Unexpected error during reflection check for {url}: {e}{RESET}")
         return None # Indicate other error
 
-def check_xss_with_selenium(url, payloads, selenium_timeout):
+def check_xss_with_selenium(driver, url, payloads, selenium_timeout):
     """High-speed, accurate Selenium check for XSS using WebDriverWait."""
-    global chrome_executable_path # Access the global variable
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--blink-settings=imagesEnabled=false")
-    # --- Add flags to potentially reduce telemetry/update checks --- #
-    chrome_options.add_argument("--disable-component-update")
-    chrome_options.add_argument("--disable-background-networking")
-    # Add experimental options if necessary, use with caution
-    # chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    # ------------------------------------------------------------- #
-    chrome_options.set_capability("unhandledPromptBehavior", "dismiss")
+    results = []
+    wait_timeout = selenium_timeout # Use the full timeout specified by -T
+    logging.debug(f"WebDriverWait timeout for alert: {wait_timeout}s")
 
-    # Set Chrome binary location if provided via argument
-    if chrome_executable_path and os.path.exists(chrome_executable_path):
-        logging.debug(f"Using specified Chrome binary: {chrome_executable_path}")
-        chrome_options.binary_location = chrome_executable_path
-    elif chrome_executable_path:
-        logging.warning(f"{RED}Specified Chrome path does not exist: {chrome_executable_path}{RESET}")
-
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        chrome_options.add_argument(f"--user-data-dir={tmpdirname}")
-        service = Service()
-        driver = None
+    for payload in payloads:
+        if shutdown_flag.is_set():
+            break
+        full_url = f"{url}{payload}"
+        alerted = False
+        alert_text = None
         try:
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.set_page_load_timeout(selenium_timeout)
-            try:
-                pid = driver.service.process.pid
-                proc = psutil.Process(pid)
-                selenium_processes.append(proc)
-            except psutil.NoSuchProcess:
-                return [(False, p, None) for p in payloads]
-            results = []
-            # Use the full timeout provided for waiting for the alert
-            # wait_timeout = max(0.1, timeout * 0.5) # Wait for half the page load timeout, min 0.1s
-            wait_timeout = selenium_timeout # Use the full timeout specified by -T
-            logging.debug(f"WebDriverWait timeout for alert: {wait_timeout}s")
-
-            for payload in payloads:
-                if shutdown_flag.is_set():
-                    break
-                full_url = f"{url}{payload}"
-                alerted = False
-                alert_text = None
-                try:
-                    driver.get(full_url)
-                    # Add a very small fixed delay to allow initial script execution
-                    time.sleep(0.05)
-                    # Explicitly wait for an alert to be present
-                    wait = WebDriverWait(driver, wait_timeout)
-                    alert = wait.until(EC.alert_is_present())
-                    if alert:
-                        alert_text = alert.text
-                        alert.accept()
-                        alerted = True
-                        logging.debug(f"Alert detected for {full_url} with text: {alert_text}")
-                    else:
-                         # This case should technically not be reached if wait.until succeeded
-                         logging.debug(f"No alert detected (wait.until returned non-alert?) for {full_url}")
-                except TimeoutException:
-                    # No alert appeared within the wait timeout
-                    logging.debug(f"Timeout ({wait_timeout}s) waiting for alert on {full_url}")
-                    alerted = False
-                except NoAlertPresentException:
-                    # Should be caught by WebDriverWait, but as a fallback
-                    logging.debug(f"NoAlertPresentException (fallback) after wait for {full_url}")
-                    alerted = False
-                except WebDriverException as e:
-                    # More specific logging for WebDriver errors
-                    logging.warning(f"{RED}WebDriverException for {full_url}: {str(e).splitlines()[0]}{RESET}") # Log first line of error
-                    alerted = False
-                finally:
-                    results.append((alerted, payload, alert_text if alerted else None))
-                    try:
-                       driver.get("about:blank") # Navigate away to clear state
-                    except WebDriverException:
-                        pass # Ignore errors navigating away
-            return results
+            driver.get(full_url)
+            # Add a very small fixed delay to allow initial script execution
+            time.sleep(0.05)
+            # Explicitly wait for an alert to be present
+            wait = WebDriverWait(driver, wait_timeout)
+            alert = wait.until(EC.alert_is_present())
+            if alert:
+                alert_text = alert.text
+                alert.accept()
+                alerted = True
+                logging.debug(f"Alert detected for {full_url} with text: {alert_text}")
+            else:
+                 # This case should technically not be reached if wait.until succeeded
+                 logging.debug(f"No alert detected (wait.until returned non-alert?) for {full_url}")
+        except TimeoutException:
+            # No alert appeared within the wait timeout
+            logging.debug(f"Timeout ({wait_timeout}s) waiting for alert on {full_url}")
+            alerted = False
+        except NoAlertPresentException:
+            # Should be caught by WebDriverWait, but as a fallback
+            logging.debug(f"NoAlertPresentException (fallback) after wait for {full_url}")
+            alerted = False
+        except WebDriverException as e:
+            # More specific logging for WebDriver errors
+            logging.warning(f"{RED}WebDriverException for {full_url}: {str(e).splitlines()[0]}{RESET}") # Log first line of error
+            alerted = False
         finally:
-            if driver:
-                driver.quit()
-                try:
-                    selenium_processes.remove(proc)
-                except (ValueError, psutil.NoSuchProcess):
-                    pass
-
-def safe_launch_selenium(url, payloads, selenium_timeout):
-    """Launch Selenium with extreme efficiency."""
-    if shutdown_flag.is_set():
-        return [(False, p, None) for p in payloads]
-    with selenium_semaphore:
-        while psutil.cpu_percent() > 60 or psutil.virtual_memory().percent > 60:
-            if shutdown_flag.is_set():
-                return [(False, p, None) for p in payloads]
-            time.sleep(0.5)
-        return check_xss_with_selenium(url, payloads, selenium_timeout)
+            results.append((alerted, payload, alert_text if alerted else None))
+            try:
+               driver.get("about:blank") # Navigate away to clear state
+            except WebDriverException:
+                pass # Ignore errors navigating away
+    return results
 
 ### Logging and Worker Functions
 
-def log_vulnerability(full_url, is_vuln, payload, output_file):
+def log_vulnerability(full_url, is_vuln, payload, output_file, param=None):
     """Log vulnerability status and write vulnerable URLs."""
     global vulnerable_urls
     status = f"{GREEN}[vuln]{RESET}" if is_vuln else f"{RED}[not vuln]{RESET}"
     message = f"{GREEN}[info]{RESET} {full_url} {status}"
+    if is_vuln and param:
+        message += f" (param: {param})"
     logging.info(message)
     if output_file and is_vuln and not shutdown_flag.is_set():
         output_file.write(f"{full_url}\n")
         output_file.flush()
-        vulnerable_urls.append((full_url, payload))
+        vulnerable_urls.append((full_url, payload, param))
 
-def test_single_url_payload(base_url, payload, proxies, encode_times, http_timeout, selenium_timeout, output_file):
-    """Test a single base_url + payload combination."""
+def worker(browser_manager, url_queue, payloads, proxies, encode_times, http_timeout, selenium_timeout, output_file):
+    """Worker function processes URLs from the queue."""
     session = create_session(proxies)
-    full_url = f"{base_url}{payload}" # Simple append
-    encoded_payload = encode_payload(payload, encode_times)
-    full_encoded_url = f"{base_url}{encoded_payload}"
+    browser = browser_manager.get_browser()
+    try:
+        while not url_queue.empty():
+            if shutdown_flag.is_set():
+                break
+            base_url = url_queue.get()
+            for payload in payloads:
+                if shutdown_flag.is_set():
+                    break
 
-    # Perform reflection check using the encoded URL and original payload for checking
-    # Pass the *original* payload for reflection check logic, but the encoded URL
-    reflected = check_reflection(full_encoded_url, payload, session, http_timeout)
+                full_url = f"{base_url}{payload}" # Simple append
+                encoded_payload = encode_payload(payload, encode_times)
+                full_encoded_url = f"{base_url}{encoded_payload}"
 
-    if reflected is True:
-        # If reflected, perform Selenium check on the potentially encoded URL
-        results = safe_launch_selenium(full_encoded_url, [payload], selenium_timeout)
-        for is_vuln, payload_used_in_selenium, _ in results:
-            log_vulnerability(full_encoded_url, is_vuln, payload_used_in_selenium, output_file)
-    elif reflected is False:
-        # Only log non-vuln if request succeeded but no reflection
-        log_vulnerability(full_encoded_url, False, payload, output_file)
-    # else: reflected is None (network error/shutdown), error already logged
+                # Perform reflection check
+                reflected = check_reflection(full_encoded_url, payload, session, http_timeout)
 
-def worker(base_url, payloads, proxies, encode_times, http_timeout, selenium_timeout, output_file):
-    """Worker function processes all payloads for a single base URL."""
-    for payload in payloads:
-        if shutdown_flag.is_set():
-            break
-        test_single_url_payload(base_url, payload, proxies, encode_times, http_timeout, selenium_timeout, output_file)
+                if reflected is True:
+                    # If reflected, perform Selenium check
+                    results = check_xss_with_selenium(browser, full_encoded_url, [payload], selenium_timeout)
+                    for is_vuln, payload_used, _ in results:
+                        param = None
+                        if is_vuln:
+                            try:
+                                parsed_url = urllib.parse.urlparse(full_encoded_url)
+                                query_params = urllib.parse.parse_qs(parsed_url.query)
+                                for p, v in query_params.items():
+                                    if payload in v:
+                                        param = p
+                                        break
+                            except:
+                                pass
+                        log_vulnerability(full_encoded_url, is_vuln, payload_used, output_file, param=param)
+                elif reflected is False:
+                    # Only log non-vuln if request succeeded but no reflection
+                    log_vulnerability(full_encoded_url, False, payload, output_file)
+            url_queue.task_done()
+    finally:
+        browser_manager.return_browser(browser)
 
-def test_xss(base_urls, payloads_to_test, proxies, encode_times, num_threads, http_timeout, selenium_timeout, output_file, output_base):
+def test_xss(base_urls, payloads_to_test, proxies, encode_times, num_threads, http_timeout, selenium_timeout, output_file, output_base, num_browsers):
     """Test multiple base URLs against multiple payloads for XSS."""
     global vulnerable_urls, interrupted_scan
     start_time = time.time()
 
-    total_urls_scanned = len(base_urls)
+    url_generator = iter(base_urls)
     total_payloads = len(payloads_to_test)
-    estimated_total_tests = total_urls_scanned * total_payloads
+    # The total number of URLs is unknown if it's a generator, so we can't estimate total tests.
 
-    logging.info(f"{CYAN}[info] Total Tests to Perform: {estimated_total_tests}{RESET}")
+    logging.info(f"{CYAN}[info] Starting scan...{RESET}")
 
-    # Create tuples of (base_url, payload_list) for the worker
-    # The worker will iterate through payloads for its assigned base_url
-    tasks = [(url, payloads_to_test) for url in base_urls]
+    browser_manager = BrowserManager(num_browsers=num_browsers, selenium_timeout=selenium_timeout)
+    url_queue = queue.Queue()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        # Submit tasks: worker processes one base_url against all payloads
-        futures = [
-            executor.submit(worker, url, ploads, proxies, encode_times, http_timeout, selenium_timeout, output_file)
-            for url, ploads in tasks
-        ]
-        try:
-            processed_url_count = 0
-            # Optional: Progress tracking could be added here using as_completed
-            for future in concurrent.futures.as_completed(futures):
-                if shutdown_flag.is_set():
-                    break
-                try:
-                    future.result() # Check for exceptions from worker
-                except Exception as exc:
-                     logging.error(f"{RED}Worker thread for a base URL generated an exception: {exc}{RESET}")
-                processed_url_count += 1
-                # Add progress indicator if desired, e.g.:
-                # print(f"Progress: {processed_url_count}/{total_urls_scanned} base URLs completed", end='\r')
+    # To avoid loading all URLs into the queue at once, we can feed the queue in a separate thread.
+    def queue_feeder(url_gen, q):
+        for url in url_gen:
+            q.put(url)
 
-        finally:
-            if shutdown_flag.is_set():
-                logging.info("\nCancelling remaining tasks...")
-                for f in futures:
-                    f.cancel()
-            executor.shutdown(wait=not shutdown_flag.is_set())
-            cleanup_selenium()
+    feeder_thread = threading.Thread(target=queue_feeder, args=(url_generator, url_queue))
+    feeder_thread.start()
+
+    threads = []
+    for _ in range(num_threads):
+        thread = threading.Thread(target=worker, args=(
+            browser_manager, url_queue, payloads_to_test, proxies, encode_times, http_timeout, selenium_timeout, output_file
+        ))
+        thread.start()
+        threads.append(thread)
+
+    try:
+        # Wait for all URLs to be processed
+        url_queue.join()
+        # Signal shutdown to threads
+        shutdown_flag.set()
+    except (KeyboardInterrupt, SystemExit):
+        shutdown_flag.set()
+        interrupted_scan = True
+
+    for thread in threads:
+        thread.join()
+
+    feeder_thread.join()
+    browser_manager.close_all_browsers()
 
     end_time = time.time()
     time_taken = int(end_time - start_time)
     total_vuln = len(vulnerable_urls)
-    # Total non-vuln is harder to calculate accurately if tasks fail/are interrupted
-    # We'll report based on total tests attempted vs vulnerabilities found
-    total_non_vuln = max(0, estimated_total_tests - total_vuln) if not interrupted_scan else -1
+    # Since we don't know the total number of URLs, we can't calculate non-vulnerable or total tests.
 
     # Generate HTML report
     if vulnerable_urls:
         report_name_base = f"{output_base}_page_1.html"
         print(f"\n{GREEN}Generated HTML report (check {report_name_base} ...){RESET}")
-        generate_html_report(output_base, estimated_total_tests, total_vuln, total_non_vuln, time_taken, interrupted=interrupted_scan)
+        generate_html_report(output_base, -1, total_vuln, -1, time_taken, interrupted=interrupted_scan)
     elif not interrupted_scan:
         print(f"\n{CYAN}Scan completed. No vulnerabilities found.{RESET}")
 
@@ -1200,9 +1051,7 @@ def test_xss(base_urls, payloads_to_test, proxies, encode_times, num_threads, ht
         print("╠" + "═"*col1_width + "╬" + "═"*col2_width + "╣")
         print(f"║ {'Metric':<{col1_width-2}} ║ {'Value':<{col2_width-2}} ║")
         print("╠" + "═"*col1_width + "╬" + "═"*col2_width + "╣")
-        print(f"║ {'Base URLs Scanned:':<{col1_width-2}} ║ {total_urls_scanned:<{col2_width-2}} ║")
         print(f"║ {'Payloads Loaded:':<{col1_width-2}} ║ {total_payloads:<{col2_width-2}} ║")
-        print(f"║ {'Total Tests Attempted:':<{col1_width-2}} ║ {estimated_total_tests:<{col2_width-2}} ║")
 
         vuln_val_str = str(total_vuln)
         vuln_val_display = f"{GREEN}{total_vuln}{RESET}" if total_vuln > 0 else vuln_val_str
@@ -1221,9 +1070,54 @@ global_args = None
 
 ### Main Function
 
+def recon_urls(urls, http_timeout, proxy):
+    """
+    Performs a reconnaissance scan on a list of URLs to find parameters
+    that reflect their input.
+    """
+    logging.info(f"{CYAN}[info] Starting reconnaissance scan...{RESET}")
+    reflecting_urls = []
+    session = create_session(proxy)
+
+    for url in urls:
+        try:
+            parsed_url = urllib.parse.urlparse(url)
+            params = urllib.parse.parse_qs(parsed_url.query)
+            if not params:
+                logging.info(f"{CYAN}[info] Skipping URL with no parameters: {url}{RESET}")
+                continue
+
+            for param, values in params.items():
+                test_payload = "lazyxss"
+                # Create a copy of the params, replace the value of the current param
+                test_params = params.copy()
+                test_params[param] = test_payload
+
+                # Rebuild the URL with the test payload
+                new_query = urllib.parse.urlencode(test_params, doseq=True)
+                test_url = parsed_url._replace(query=new_query).geturl()
+
+                # Check for reflection
+                if check_reflection(test_url, test_payload, session, http_timeout):
+                    logging.info(f"{GREEN}[reflecting] {url} (parameter: {param}){RESET}")
+                    if url not in reflecting_urls:
+                        reflecting_urls.append(url)
+                    # Once one reflecting param is found, we can move to the next URL
+                    break
+        except Exception as e:
+            logging.error(f"{RED}Error during recon for {url}: {e}{RESET}")
+
+    output_filename = "reflecting_urls.txt"
+    with open(output_filename, "w") as f:
+        for url in reflecting_urls:
+            f.write(url + "\n")
+
+    logging.info(f"\n{GREEN}Reconnaissance complete. Found {len(reflecting_urls)} reflecting URLs.{RESET}")
+    logging.info(f"{GREEN}A list of these URLs has been saved to {output_filename}{RESET}")
+
 def main():
     """Main function: parse arguments, display banner, and start scanning."""
-    global global_args, chrome_executable_path # Declare modification of globals
+    global global_args # Declare modification of globals
 
     # --- Clear Screen --- #
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -1243,29 +1137,31 @@ def main():
     parser.add_argument('-e', '--encoding', type=int, default=0, help="Encoding times (default: 0).")
     parser.add_argument('-o', '--output', type=str, default='result.txt', help="Output file (default: result.txt).")
     parser.add_argument('-T', '--time-sec', type=int, default=2, help="Timeout in seconds for Selenium checks (default: 2).")
-    parser.add_argument('--chrome-path', type=str, help="Specify the full path to the chrome executable.")
     parser.add_argument('--selenium-workers', type=int, default=5, help="Number of concurrent Selenium instances (default: 5).")
     parser.add_argument('--proxy', type=str, help="Proxy server URL (e.g., http://127.0.0.1:8080).")
     parser.add_argument('--http-timeout', type=int, default=20, help="Timeout in seconds for HTTP requests (connect & read) (default: 20).")
+    parser.add_argument('--recon', action='store_true', help="Perform a preliminary reflection check to find promising URLs.")
 
     args = parser.parse_args()
     global_args = args # Store args globally
 
-    # ---- Initialize Global Semaphore ----
-    global selenium_semaphore
-    if args.selenium_workers < 1:
-        print(f"{RED}Error: Number of selenium workers must be at least 1.{RESET}")
-        sys.exit(1)
-    selenium_semaphore = threading.Semaphore(args.selenium_workers)
-    logging.debug(f"Using {args.selenium_workers} concurrent Selenium workers.")
-    # -------------------------------------
-
-    # Store the chrome path if provided
-    if args.chrome_path:
-        chrome_executable_path = args.chrome_path
-
     # Display banner
     print_banner()
+
+    # ---- Recon Mode ----
+    if args.recon:
+        urls_for_recon = []
+        if args.url:
+            urls_for_recon.append(args.url)
+        elif args.file:
+            urls_for_recon = list(load_file_contents(args.file))
+
+        if not urls_for_recon:
+            print(f"{RED}Error: No URLs provided for reconnaissance.{RESET}")
+            sys.exit(1)
+
+        recon_urls(urls_for_recon, args.http_timeout, args.proxy)
+        sys.exit(0)
 
     # ---- Refined Startup Logging ----
     if args.url:
@@ -1274,27 +1170,23 @@ def main():
         logging.info(f"{CYAN}[info] Target File: {args.file}{RESET}")
     logging.info(f"{CYAN}[info] Payload File: {args.payloads}{RESET}")
     # Load payloads early to get count
-    payloads = load_file_contents(args.payloads)
+    payloads = list(load_file_contents(args.payloads))
     if not payloads:
         print(f"{RED}Error: No valid payloads found in '{args.payloads}'.{RESET}")
         sys.exit(1)
     logging.info(f"{CYAN}[info] Total Payloads: {len(payloads)}{RESET}")
 
     # Load URLs
-    base_urls = []
     if args.url:
         base_urls = [args.url]
     else:
         base_urls = load_file_contents(args.file)
-        if not base_urls:
-            print(f"{RED}Error: No valid URLs found in the file '{args.file}'.{RESET}")
-            sys.exit(1)
 
     # --- DNS Pre-check (Moved Here) --- #
     try:
-        if not base_urls: # Should not happen if previous checks passed, but safer
-             raise ValueError("Base URL list is empty before DNS check.")
-        first_target_url = base_urls[0]
+        first_target_url = next(iter(base_urls), None)
+        if not first_target_url:
+             raise ValueError("URL list is empty before DNS check.")
         hostname = urllib.parse.urlparse(first_target_url).netloc
         if hostname:
             logging.info(f"{CYAN}[info] Performing initial DNS check for: {hostname}{RESET}")
@@ -1345,10 +1237,6 @@ def main():
         print(f"{RED}Error: Timeout must be at least 1 second.{RESET}")
         sys.exit(1)
 
-    # Display Chrome version (now done silently by get_chrome_version)
-    # chrome_version = get_chrome_version()
-    # print(f"{CYAN}Chrome Version: {chrome_version}{RESET}\n")
-    get_chrome_version() # Run detection, logs warning if N/A
     print("\n") # Add a newline after detection attempt
 
     logging.info(f"{CYAN}[info] Scan Starting...{RESET}")
@@ -1370,15 +1258,15 @@ def main():
             payloads_to_test=payloads,
             proxies=args.proxy,
             encode_times=args.encoding,
-            num_threads=min(args.threads, len(base_urls)), # Threads per base URL
+            num_threads=args.threads,
             http_timeout=args.http_timeout, # Pass HTTP timeout
             selenium_timeout=args.time_sec, # Pass Selenium timeout (existing -T)
             output_file=output_file,
-            output_base=output_base
+            output_base=output_base,
+            num_browsers=args.selenium_workers
         )
     finally:
         output_file.close()
-        cleanup_selenium()
 
 if __name__ == "__main__":
     main()
