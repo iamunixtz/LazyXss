@@ -16,7 +16,7 @@ LazyXSS is a powerful and efficient Python tool designed to automate the detecti
 <div align="center">
 
 **LazyXSS in Action!**
-![image](https://github.com/user-attachments/assets/772131f1-e761-4a7e-bb78-f7f03540e957)
+![image](lazyxss.png)
 
 </div>
 
