@@ -1,4 +1,0 @@
-requests
-selenium
-colorama
-webdriver-manager
