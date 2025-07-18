@@ -36,15 +36,6 @@ LazyXSS is a powerful and efficient Python tool designed to automate the detecti
 *   **Save Report on Interrupt:** Attempts to save the current findings to the HTML report if the scan is interrupted (Ctrl+C) and vulnerabilities were found.
 *   **Randomized User-Agents:** Uses common user agents randomly for HTTP requests.
 
-## Video Tutorial
-
-*Note: This video may show an older version of the tool.*
-<div align="center">
-  <a href="https://youtu.be/7d0vryZCf5k">
-    <img src="https://img.youtube.com/vi/7d0vryZCf5k/0.jpg" alt="LazyXSS Video Tutorial"/>
-  </a>
-</div>
-
 ## Requirements
 
 *   Python 3.x
